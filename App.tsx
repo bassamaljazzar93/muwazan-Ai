@@ -19,6 +19,11 @@ const THEMES: Record<AppTheme, { bg: string, text: string, primary: string, shad
   slate: { bg: 'bg-slate-800', text: 'text-slate-800', primary: 'slate', shadow: 'shadow-slate-100', border: 'border-slate-100', accent: 'bg-slate-100' }
 };
 
+const UNHEALTHY_FOODS = [
+  'سكر', 'حلويات', 'مقليات', 'شيبس', 'بيتزا', 'برجر', 'مشروبات غازية', 'صودا', 'دونات', 'وجبات سريعة',
+  'sugar', 'candy', 'fried', 'chips', 'pizza', 'burger', 'soda', 'donuts', 'fast food', 'junk food'
+];
+
 const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthSession>(() => {
     const saved = localStorage.getItem('hj_auth');
@@ -124,7 +129,7 @@ const App: React.FC = () => {
 
       const prompt = skipMeals 
         ? `FAST TRACK: Generate a studied 21-day training plan for a ${targetUser.gender} using strategy "${strategy.name}". User: ${targetUser.age}yr, ${targetUser.height}cm, ${targetUser.currentWeight}kg. Language: ${targetLangName}. JSON strictly.`
-        : `Generate meal & 21-day training plan for a ${targetUser.gender}. Strategy: "${strategy.name}". Target Daily Calories: ${dailyTarget}. Preferences: Likes ${targetUser.likedFoods.join(',')}, Dislikes ${targetUser.dislikedFoods.join(',')}. IMPORTANT: Keep meal names short and descriptive (MAX 7 WORDS). Language: ${targetLangName}. JSON strictly.`;
+        : `Generate meal & 21-day training plan for a ${targetUser.gender}. Strategy: "${strategy.name}". Target Daily Calories: ${dailyTarget}. Preferences: Likes ${targetUser.likedFoods.join(',')}, Dislikes ${targetUser.dislikedFoods.join(',')}. IMPORTANT: Respond strictly in ${targetLangName}. Keep meal names very short (MAX 6 WORDS). No long descriptions. JSON strictly.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
@@ -143,6 +148,7 @@ const App: React.FC = () => {
           }
         }
       });
+      // Corrected extraction of text output from GenerateContentResponse
       const data = JSON.parse(response.text || '{}');
       if (!skipMeals && data.plan) setCustomWeeklyPlan(data.plan);
       setWeeklyTips(data.tips || []);
@@ -203,7 +209,7 @@ const App: React.FC = () => {
   if (!auth.isLoggedIn) return <LoginView onLogin={(email) => setAuth({ email, isLoggedIn: true, method: 'manual' })} />;
   
   if (showSetup) return <SetupView onComplete={(u: any) => { 
-    const completeUser = {...u, language: initialLanguage, mealRegenCount: 0}; 
+    const completeUser = {...u, mealRegenCount: 0}; 
     setUser(completeUser); 
     setShowSetup(false);
     setWeightLogs([{ date: new Date().toISOString().split('T')[0], weight: Number(u.currentWeight) }]);
@@ -295,20 +301,27 @@ const App: React.FC = () => {
 // --- المساعد الشخصي والتجهيز المحدث ---
 
 const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: Language }> = ({ onComplete, initialLang }) => {
-  const t = translations[initialLang];
+  const [lang, setLang] = useState(initialLang);
+  const t = translations[lang];
   const [step, setStep] = useState(1);
   const [profile, setProfile] = useState<Partial<UserProfile>>({
     name: '', age: 25, gender: 'male', height: 170, currentWeight: 70, targetWeight: 65,
-    activityLevel: 'moderate', likedFoods: [], dislikedFoods: [], language: initialLang, theme: 'indigo', mealRegenCount: 0
+    activityLevel: 'moderate', likedFoods: [], dislikedFoods: [], language: lang, theme: 'indigo', mealRegenCount: 0
   });
 
   const [foodInput, setFoodInput] = useState('');
+  const [warning, setWarning] = useState<string | null>(null);
 
-  const addFood = (type: 'liked' | 'disliked') => {
-    if (!foodInput.trim()) return;
+  const addFood = (food: string, type: 'liked' | 'disliked') => {
+    const isUnhealthy = UNHEALTHY_FOODS.some(u => food.toLowerCase().includes(u));
+    if (isUnhealthy) {
+      setWarning(t.setup.unhealthyWarning);
+      setTimeout(() => setWarning(null), 3000);
+      return;
+    }
     const list = type === 'liked' ? [...(profile.likedFoods || [])] : [...(profile.dislikedFoods || [])];
-    if (!list.includes(foodInput.trim())) {
-      list.push(foodInput.trim());
+    if (!list.includes(food.trim())) {
+      list.push(food.trim());
       setProfile({ ...profile, [type === 'liked' ? 'likedFoods' : 'dislikedFoods']: list });
     }
     setFoodInput('');
@@ -321,7 +334,7 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
   };
 
   return (
-    <div className="min-h-screen bg-indigo-600 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-indigo-600 flex items-center justify-center p-4" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       <div className="bg-white/95 backdrop-blur-xl rounded-[3rem] p-8 max-w-xl w-full shadow-2xl animate-in fade-in zoom-in-95 duration-500 overflow-y-auto max-h-[90vh] no-scrollbar">
         <div className="text-center mb-8">
           <div className="w-16 h-16 bg-indigo-600 text-white rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4 font-black">🚀</div>
@@ -332,7 +345,7 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
         {step === 1 && (
           <div className="space-y-6">
             <div className="space-y-4">
-              <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.name}</label><input value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} placeholder="Bassam..." className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
+              <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.name}</label><input value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} placeholder="..." className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
               <div className="grid grid-cols-2 gap-4">
                 <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.age}</label><input type="number" value={profile.age} onChange={e => setProfile({...profile, age: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
                 <div>
@@ -341,6 +354,12 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
                       <button onClick={() => setProfile({...profile, gender: 'male'})} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${profile.gender === 'male' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>{t.setup.male}</button>
                       <button onClick={() => setProfile({...profile, gender: 'female'})} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${profile.gender === 'female' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>{t.setup.female}</button>
                    </div>
+                </div>
+              </div>
+              <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">Language / اللغة</label>
+                <div className="flex bg-slate-50 p-1 rounded-2xl border gap-1">
+                  <button onClick={() => { setLang('ar'); setProfile({...profile, language: 'ar'}); }} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${lang === 'ar' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400'}`}>العربية</button>
+                  <button onClick={() => { setLang('en'); setProfile({...profile, language: 'en'}); }} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${lang === 'en' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400'}`}>English</button>
                 </div>
               </div>
             </div>
@@ -353,10 +372,10 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
             <div className="space-y-4">
               <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.activityLevel}</label>
                 <select value={profile.activityLevel} onChange={e => setProfile({...profile, activityLevel: e.target.value as any})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-sm">
-                  <option value="sedentary">{initialLang === 'ar' ? 'خامل (مكتبي)' : 'Sedentary'}</option>
-                  <option value="light">{initialLang === 'ar' ? 'نشاط خفيف' : 'Light'}</option>
-                  <option value="moderate">{initialLang === 'ar' ? 'نشاط متوسط' : 'Moderate'}</option>
-                  <option value="active">{initialLang === 'ar' ? 'نشاط عالٍ' : 'Active'}</option>
+                  <option value="sedentary">{lang === 'ar' ? 'خامل (مكتبي)' : 'Sedentary'}</option>
+                  <option value="light">{lang === 'ar' ? 'نشاط خفيف' : 'Light'}</option>
+                  <option value="moderate">{lang === 'ar' ? 'نشاط متوسط' : 'Moderate'}</option>
+                  <option value="active">{lang === 'ar' ? 'نشاط عالٍ' : 'Active'}</option>
                 </select>
               </div>
               <div className="grid grid-cols-3 gap-4">
@@ -366,36 +385,40 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
               </div>
             </div>
             <div className="flex gap-2">
-               <button onClick={() => setStep(1)} className="px-6 py-4 border rounded-2xl font-black text-xs">رجوع</button>
-               <button onClick={() => setStep(3)} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">متابعة</button>
+               <button onClick={() => setStep(1)} className="px-6 py-4 border rounded-2xl font-black text-xs">{t.setup.back}</button>
+               <button onClick={() => setStep(3)} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">{t.setup.next}</button>
             </div>
           </div>
         )}
 
         {step === 3 && (
           <div className="space-y-6">
+            {warning && <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-[10px] font-black rounded-xl text-center animate-bounce">{warning}</div>}
+            
             <div>
-              <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.likedFoods} ❤️</label>
+              <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase">{t.setup.likedFoods} ❤️</label>
               <div className="flex gap-2 mb-3">
                  <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
-                 <button onClick={() => addFood('liked')} className="w-10 h-10 bg-indigo-600 text-white rounded-xl font-black">+</button>
+                 <button onClick={() => addFood(foodInput, 'liked')} className="w-10 h-10 bg-indigo-600 text-white rounded-xl font-black">+</button>
+              </div>
+              <div className="flex flex-wrap gap-1.5 mb-4 max-h-32 overflow-y-auto no-scrollbar border-b pb-4">
+                {/* Fixed "unknown" error by asserting FOOD_OPTIONS[lang] values are string arrays */}
+                {(Object.values(FOOD_OPTIONS[lang] as Record<string, string[]>)).flat().map(food => (
+                  <button key={food} onClick={() => addFood(food, 'liked')} className={`px-2 py-1 rounded-lg text-[9px] font-bold border transition-all ${profile.likedFoods?.includes(food) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-200'}`}>+{food}</button>
+                ))}
               </div>
               <div className="flex flex-wrap gap-2">
                 {profile.likedFoods?.map(f => (
-                  <span key={f} onClick={() => removeFood(f, 'liked')} className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-100 cursor-pointer">#{f} ✕</span>
+                  <span key={f} onClick={() => removeFood(f, 'liked')} className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-[10px] font-bold border border-indigo-100 cursor-pointer">#{f} ✕</span>
                 ))}
               </div>
             </div>
             
-            <div>
-              <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.dislikedFoods} 🚫</label>
-              <div className="flex gap-2 mb-3">
-                 <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
-                 <button onClick={() => addFood('disliked')} className="w-10 h-10 bg-rose-500 text-white rounded-xl font-black">+</button>
-              </div>
+            <div className="pt-4">
+              <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase">{t.setup.dislikedFoods} 🚫</label>
               <div className="flex flex-wrap gap-2">
                 {profile.dislikedFoods?.map(f => (
-                  <span key={f} onClick={() => removeFood(f, 'disliked')} className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-lg text-xs font-bold border border-rose-100 cursor-pointer">#{f} ✕</span>
+                  <span key={f} onClick={() => removeFood(f, 'disliked')} className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-lg text-[10px] font-bold border border-rose-100 cursor-pointer">#{f} ✕</span>
                 ))}
               </div>
             </div>
@@ -410,16 +433,22 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
 
 const SettingsView: React.FC<{ 
   user: UserProfile; onSave: (u: UserProfile) => void; onLogout: () => void; theme: AppTheme;
-  onRegeneratePlan: () => void; onInstall: () => void; canInstall: boolean; t: any; lang: string;
+  onRegeneratePlan: () => void; onInstall: () => void; canInstall: boolean; t: any; lang: Language;
 }> = ({ user, onSave, onLogout, onInstall, canInstall, t, lang }) => {
   const [edited, setEdited] = useState(user);
   const [foodInput, setFoodInput] = useState('');
+  const [warning, setWarning] = useState<string | null>(null);
 
-  const addFood = (type: 'liked' | 'disliked') => {
-    if (!foodInput.trim()) return;
+  const addFood = (food: string, type: 'liked' | 'disliked') => {
+    const isUnhealthy = UNHEALTHY_FOODS.some(u => food.toLowerCase().includes(u));
+    if (isUnhealthy) {
+      setWarning(t.setup.unhealthyWarning);
+      setTimeout(() => setWarning(null), 3000);
+      return;
+    }
     const list = type === 'liked' ? [...(edited.likedFoods || [])] : [...(edited.dislikedFoods || [])];
-    if (!list.includes(foodInput.trim())) {
-      list.push(foodInput.trim());
+    if (!list.includes(food.trim())) {
+      list.push(food.trim());
       setEdited({ ...edited, [type === 'liked' ? 'likedFoods' : 'dislikedFoods']: list });
     }
     setFoodInput('');
@@ -435,9 +464,11 @@ const SettingsView: React.FC<{
     <div className="space-y-6 pb-20 animate-in fade-in">
       <div className="bg-white rounded-[2.5rem] p-8 border shadow-sm space-y-8 relative overflow-hidden">
         <div className="flex justify-between items-center mb-6">
-           <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">الملف الشخصي ⚙️</h3>
+           <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">{t.settings.title}</h3>
            <span className="text-[10px] font-black text-slate-300 uppercase">Profile Settings</span>
         </div>
+
+        {warning && <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-[10px] font-black rounded-xl text-center animate-bounce">{warning}</div>}
 
         <div className="space-y-6">
           <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.name}</label><input value={edited.name} onChange={e => setEdited({...edited, name: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
@@ -454,7 +485,7 @@ const SettingsView: React.FC<{
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{lang === 'ar' ? 'معدل نشاطك اليومي 🏃' : 'Daily Activity 🏃'}</label>
+            <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.activityLevel}</label>
               <select value={edited.activityLevel} onChange={e => setEdited({...edited, activityLevel: e.target.value as any})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-sm">
                 <option value="sedentary">{lang === 'ar' ? 'خامل (مكتبي)' : 'Sedentary'}</option>
                 <option value="light">{lang === 'ar' ? 'نشاط خفيف' : 'Light'}</option>
@@ -462,7 +493,7 @@ const SettingsView: React.FC<{
                 <option value="active">{lang === 'ar' ? 'نشاط عالٍ' : 'Active'}</option>
               </select>
             </div>
-            <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">اللغة (LANGUAGE)</label>
+            <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">Language / اللغة</label>
               <select value={edited.language} onChange={e => setEdited({...edited, language: e.target.value as Language})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-sm">
                 <option value="ar">العربية</option>
                 <option value="en">English</option>
@@ -480,7 +511,13 @@ const SettingsView: React.FC<{
             <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.likedFoods} ❤️</label>
             <div className="flex gap-2 mb-3">
                <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
-               <button onClick={() => addFood('liked')} className="w-10 h-10 bg-indigo-600 text-white rounded-xl font-black">+</button>
+               <button onClick={() => addFood(foodInput, 'liked')} className="w-10 h-10 bg-indigo-600 text-white rounded-xl font-black">+</button>
+            </div>
+            <div className="flex flex-wrap gap-1.5 mb-4 max-h-32 overflow-y-auto no-scrollbar border-b pb-4">
+              {/* Fixed "unknown" error by asserting FOOD_OPTIONS[lang] values are string arrays */}
+              {(Object.values(FOOD_OPTIONS[lang] as Record<string, string[]>)).flat().map(food => (
+                <button key={food} onClick={() => addFood(food, 'liked')} className={`px-2 py-1 rounded-lg text-[9px] font-bold border transition-all ${edited.likedFoods?.includes(food) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-200'}`}>+{food}</button>
+              ))}
             </div>
             <div className="flex flex-wrap gap-2">
               {edited.likedFoods?.map(f => (
@@ -491,10 +528,6 @@ const SettingsView: React.FC<{
           
           <div>
             <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.dislikedFoods} 🚫</label>
-            <div className="flex gap-2 mb-3">
-               <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
-               <button onClick={() => addFood('disliked')} className="w-10 h-10 bg-rose-500 text-white rounded-xl font-black">+</button>
-            </div>
             <div className="flex flex-wrap gap-2">
               {edited.dislikedFoods?.map(f => (
                 <span key={f} onClick={() => removeFood(f, 'disliked')} className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-lg text-[10px] font-bold border border-rose-100 cursor-pointer">#{f} ✕</span>
@@ -504,7 +537,7 @@ const SettingsView: React.FC<{
         </div>
 
         <div className="mt-8 p-6 bg-indigo-50 rounded-[2rem] border border-indigo-100 text-center space-y-2">
-           <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">محاولات تنسيق الوجبات المتبقية:</p>
+           <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">{lang === 'ar' ? 'محاولات تنسيق الوجبات المتبقية:' : 'Remaining meal replan attempts:'}</p>
            <p className="text-2xl font-black text-indigo-900">{Math.max(0, 2 - (edited.mealRegenCount || 0))} / 2</p>
         </div>
 
@@ -513,21 +546,8 @@ const SettingsView: React.FC<{
         </button>
       </div>
 
-      <div className="bg-white rounded-[2.5rem] p-8 border shadow-sm space-y-6">
-        <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">تثبيت التطبيق 📱 🧱</h3>
-        <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 space-y-4">
-           <p className="text-[10px] font-bold text-indigo-700 leading-relaxed">🍎 <b>iOS لمستخدمي iPhone:</b> اضغط على زر 'مشاركة' (المربع وسهم للأعلى) ثم اختر 'إضافة إلى الشاشة الرئيسية'.</p>
-           <p className="text-[10px] font-bold text-indigo-700 leading-relaxed">🤖 <b>Android لمستخدمي Android:</b> اختر 'تثبيت' من قائمة خيارات المتصفح (الثلاث نقاط).</p>
-        </div>
-        {canInstall && (
-          <button onClick={onInstall} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl flex items-center justify-center gap-2">
-            تثبيت موازن AI على شاشتك الرئيسية 🚀
-          </button>
-        )}
-      </div>
-
       <div className="bg-white rounded-[2.5rem] p-8 border shadow-sm space-y-4">
-         <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">🧘 تواصل مع المطور</h3>
+         <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">🧘 {lang === 'ar' ? 'تواصل مع المطور' : 'Contact Developer'}</h3>
          <div className="flex flex-col gap-3">
             <a href="mailto:b_aljazzar@yahoo.com" className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border hover:border-indigo-200 transition-all">
                <span className="text-xl">📧</span>

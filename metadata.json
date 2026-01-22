@@ -1,0 +1,7 @@
+{
+  "name": "Muwazan AI - The Smart Gulf Health Companion",
+  "description": "Your AI health assistant that perfectly balances your lifestyle between Ramadan and everyday life. Personalized plans, smart tracking, and intelligent advice.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

@@ -1,0 +1,23 @@
+
+{
+  "name": "موازن AI - Muwazan AI",
+  "short_name": "موازن AI",
+  "description": "مساعدك الصحي الذكي للوضع العادي ورمضان بطابع خليجي",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3105/3105807.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3105/3105807.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

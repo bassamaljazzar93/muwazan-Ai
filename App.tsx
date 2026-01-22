@@ -68,6 +68,15 @@ const App: React.FC = () => {
   const t = translations[lang];
 
   useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem('hj_auth', JSON.stringify(auth));
     localStorage.setItem('hj_mode', mode);
     if (user) localStorage.setItem('hj_user', JSON.stringify(user));
@@ -87,20 +96,15 @@ const App: React.FC = () => {
   const todayStr = new Date().toISOString().split('T')[0];
   const todayWater = waterLogs.find(l => l.date === todayStr)?.amount || 0;
   const waterRequirementMl = Math.round((user?.currentWeight || 70) * 35);
-  
   const todayEnergy = user?.energyLogs?.find(l => l.date === todayStr);
 
   const vitalScore = useMemo(() => {
     let score = 0;
-    // Water (up to 30)
-    score += Math.min(30, (todayWater / waterRequirementMl) * 30);
-    // Training (up to 30)
+    score += Math.min(30, (todayWater / (waterRequirementMl || 2500)) * 30);
     if (user?.trainingPlan) score += 30;
-    // Energy log (up to 10)
     if (todayEnergy) score += 10;
-    // Calories balance (up to 30) - placeholder logic
-    score += 25;
-    return Math.round(score);
+    score += 30; // Base score
+    return Math.min(100, Math.round(score));
   }, [todayWater, waterRequirementMl, user, todayEnergy]);
 
   const generateFullPlanAI = async (profile?: UserProfile, skipMeals: boolean = false) => {
@@ -114,13 +118,13 @@ const App: React.FC = () => {
       const dailyTarget = Math.round(bmr * activityMult);
       const targetLangName = targetUser.language === 'ar' ? 'Arabic' : 'English';
       
-      const isWeightLoss = (targetUser.currentWeight > targetUser.targetWeight + 1);
+      const isWeightLoss = (targetUser.currentWeight > targetUser.targetWeight + 0.5);
       const strategyKey = isWeightLoss ? 'weightLoss' : (targetUser.activityLevel === 'active' ? 'muscleGain' : 'fitness');
       const strategy = (TRAINING_STRATEGIES as any)[targetUser.language][strategyKey];
 
       const prompt = skipMeals 
-        ? `FAST TRACK: Generate a studied 21-day training plan using strategy "${strategy.name}". User: ${targetUser.gender}, ${targetUser.age}yr, ${targetUser.height}cm, ${targetUser.currentWeight}kg. Language: ${targetLangName}. JSON strictly.`
-        : `Generate meal & training plan for a ${targetUser.gender}. Strategy: "${strategy.name}". Calories: ${dailyTarget}. Language: ${targetLangName}. JSON strictly.`;
+        ? `FAST TRACK: Generate a studied 21-day training plan for a ${targetUser.gender} using strategy "${strategy.name}". User: ${targetUser.age}yr, ${targetUser.height}cm, ${targetUser.currentWeight}kg. Language: ${targetLangName}. JSON strictly.`
+        : `Generate meal & 21-day training plan for a ${targetUser.gender}. Strategy: "${strategy.name}". Target Daily Calories: ${dailyTarget}. Preferences: Likes ${targetUser.likedFoods.join(',')}, Dislikes ${targetUser.dislikedFoods.join(',')}. IMPORTANT: Keep meal names short and descriptive (MAX 7 WORDS). Language: ${targetLangName}. JSON strictly.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
@@ -143,7 +147,7 @@ const App: React.FC = () => {
       if (!skipMeals && data.plan) setCustomWeeklyPlan(data.plan);
       setWeeklyTips(data.tips || []);
       if (data.trainingPlan) {
-        const nextRegenCount = skipMeals ? targetUser.mealRegenCount : (targetUser.mealRegenCount || 0) + 1;
+        const nextRegenCount = (targetUser.mealRegenCount || 0) + 1;
         setUser({ 
           ...targetUser, 
           trainingPlan: data.trainingPlan, 
@@ -164,6 +168,14 @@ const App: React.FC = () => {
   const handleLogout = () => {
     localStorage.clear();
     window.location.reload();
+  };
+
+  const handleInstall = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') setDeferredPrompt(null);
+    }
   };
 
   const currentPlan = useMemo((): WeeklyPlan => {
@@ -263,9 +275,8 @@ const App: React.FC = () => {
           setUser(updatedUser); 
           generateFullPlanAI(updatedUser, skipMeals); 
         }} onLogout={handleLogout} theme={user?.theme || 'indigo'} onRegeneratePlan={() => {
-           const skipMeals = (user?.mealRegenCount || 0) >= 2;
-           generateFullPlanAI(user!, skipMeals);
-        }} onInstall={() => {}} canInstall={!!deferredPrompt} t={t} lang={lang} />}
+           generateFullPlanAI(user!);
+        }} onInstall={handleInstall} canInstall={!!deferredPrompt} t={t} lang={lang} />}
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t px-6 py-4 flex justify-around items-center z-50 shadow-lg">
@@ -281,6 +292,8 @@ const App: React.FC = () => {
   );
 };
 
+// --- المساعد الشخصي والتجهيز المحدث ---
+
 const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: Language }> = ({ onComplete, initialLang }) => {
   const t = translations[initialLang];
   const [step, setStep] = useState(1);
@@ -289,29 +302,105 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
     activityLevel: 'moderate', likedFoods: [], dislikedFoods: [], language: initialLang, theme: 'indigo', mealRegenCount: 0
   });
 
+  const [foodInput, setFoodInput] = useState('');
+
+  const addFood = (type: 'liked' | 'disliked') => {
+    if (!foodInput.trim()) return;
+    const list = type === 'liked' ? [...(profile.likedFoods || [])] : [...(profile.dislikedFoods || [])];
+    if (!list.includes(foodInput.trim())) {
+      list.push(foodInput.trim());
+      setProfile({ ...profile, [type === 'liked' ? 'likedFoods' : 'dislikedFoods']: list });
+    }
+    setFoodInput('');
+  };
+
+  const removeFood = (food: string, type: 'liked' | 'disliked') => {
+    const list = type === 'liked' ? [...(profile.likedFoods || [])] : [...(profile.dislikedFoods || [])];
+    const filtered = list.filter(f => f !== food);
+    setProfile({ ...profile, [type === 'liked' ? 'likedFoods' : 'dislikedFoods']: filtered });
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-[3rem] p-8 max-w-lg w-full shadow-2xl animate-in fade-in zoom-in-95 duration-500">
-        <h2 className="text-2xl font-black text-slate-800 mb-2">{t.setup.title}</h2>
-        <p className="text-slate-500 text-sm mb-8 font-bold">{t.setup.subtitle}</p>
+    <div className="min-h-screen bg-indigo-600 flex items-center justify-center p-4">
+      <div className="bg-white/95 backdrop-blur-xl rounded-[3rem] p-8 max-w-xl w-full shadow-2xl animate-in fade-in zoom-in-95 duration-500 overflow-y-auto max-h-[90vh] no-scrollbar">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-indigo-600 text-white rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4 font-black">🚀</div>
+          <h2 className="text-2xl font-black text-slate-800">{t.setup.title}</h2>
+          <p className="text-slate-500 text-xs font-bold mt-1">{t.setup.subtitle}</p>
+        </div>
 
         {step === 1 && (
-          <div className="space-y-4">
-            <div><label className="block text-xs font-black text-slate-400 mb-2 uppercase">{t.setup.name}</label><input value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
-            <button onClick={() => setStep(2)} disabled={!profile.name} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black shadow-lg mt-4 transition-all active:scale-95">{t.setup.next}</button>
+          <div className="space-y-6">
+            <div className="space-y-4">
+              <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.name}</label><input value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} placeholder="Bassam..." className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.age}</label><input type="number" value={profile.age} onChange={e => setProfile({...profile, age: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
+                <div>
+                   <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.gender}</label>
+                   <div className="flex bg-slate-50 p-1 rounded-2xl border gap-1">
+                      <button onClick={() => setProfile({...profile, gender: 'male'})} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${profile.gender === 'male' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>{t.setup.male}</button>
+                      <button onClick={() => setProfile({...profile, gender: 'female'})} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${profile.gender === 'female' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>{t.setup.female}</button>
+                   </div>
+                </div>
+              </div>
+            </div>
+            <button onClick={() => setStep(2)} disabled={!profile.name} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black shadow-lg transition-all active:scale-95">{t.setup.next}</button>
           </div>
         )}
 
         {step === 2 && (
           <div className="space-y-6">
             <div className="space-y-4">
-              <div><label className="block text-xs font-black text-slate-400 mb-2 uppercase">{t.setup.height} (cm)</label><input type="number" value={profile.height} onChange={e => setProfile({...profile, height: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="block text-xs font-black text-slate-400 mb-2 uppercase">{t.currentWeight}</label><input type="number" value={profile.currentWeight} onChange={e => setProfile({...profile, currentWeight: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
-                <div><label className="block text-xs font-black text-slate-400 mb-2 uppercase">{t.setup.targetWeight}</label><input type="number" value={profile.targetWeight} onChange={e => setProfile({...profile, targetWeight: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
+              <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.activityLevel}</label>
+                <select value={profile.activityLevel} onChange={e => setProfile({...profile, activityLevel: e.target.value as any})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-sm">
+                  <option value="sedentary">{initialLang === 'ar' ? 'خامل (مكتبي)' : 'Sedentary'}</option>
+                  <option value="light">{initialLang === 'ar' ? 'نشاط خفيف' : 'Light'}</option>
+                  <option value="moderate">{initialLang === 'ar' ? 'نشاط متوسط' : 'Moderate'}</option>
+                  <option value="active">{initialLang === 'ar' ? 'نشاط عالٍ' : 'Active'}</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div><label className="block text-[10px] font-black text-slate-400 mb-1 uppercase">{t.setup.height}</label><input type="number" value={profile.height} onChange={e => setProfile({...profile, height: Number(e.target.value)})} className="w-full p-3 bg-slate-50 border rounded-xl outline-none font-bold text-sm" /></div>
+                <div><label className="block text-[10px] font-black text-slate-400 mb-1 uppercase">{t.currentWeight}</label><input type="number" value={profile.currentWeight} onChange={e => setProfile({...profile, currentWeight: Number(e.target.value)})} className="w-full p-3 bg-slate-50 border rounded-xl outline-none font-bold text-sm" /></div>
+                <div><label className="block text-[10px] font-black text-slate-400 mb-1 uppercase">{t.setup.targetWeight}</label><input type="number" value={profile.targetWeight} onChange={e => setProfile({...profile, targetWeight: Number(e.target.value)})} className="w-full p-3 bg-slate-50 border rounded-xl outline-none font-bold text-sm" /></div>
               </div>
             </div>
-            <button onClick={() => onComplete(profile as UserProfile)} className="w-full py-5 bg-emerald-600 text-white rounded-2xl font-black shadow-lg">إنهاء</button>
+            <div className="flex gap-2">
+               <button onClick={() => setStep(1)} className="px-6 py-4 border rounded-2xl font-black text-xs">رجوع</button>
+               <button onClick={() => setStep(3)} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">متابعة</button>
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="space-y-6">
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.likedFoods} ❤️</label>
+              <div className="flex gap-2 mb-3">
+                 <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
+                 <button onClick={() => addFood('liked')} className="w-10 h-10 bg-indigo-600 text-white rounded-xl font-black">+</button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {profile.likedFoods?.map(f => (
+                  <span key={f} onClick={() => removeFood(f, 'liked')} className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-100 cursor-pointer">#{f} ✕</span>
+                ))}
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.dislikedFoods} 🚫</label>
+              <div className="flex gap-2 mb-3">
+                 <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
+                 <button onClick={() => addFood('disliked')} className="w-10 h-10 bg-rose-500 text-white rounded-xl font-black">+</button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {profile.dislikedFoods?.map(f => (
+                  <span key={f} onClick={() => removeFood(f, 'disliked')} className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-lg text-xs font-bold border border-rose-100 cursor-pointer">#{f} ✕</span>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={() => onComplete(profile as UserProfile)} className="w-full py-5 bg-emerald-600 text-white rounded-2xl font-black shadow-lg transition-all active:scale-95">{t.setup.finish}</button>
           </div>
         )}
       </div>
@@ -322,15 +411,135 @@ const SetupView: React.FC<{ onComplete: (u: UserProfile) => void; initialLang: L
 const SettingsView: React.FC<{ 
   user: UserProfile; onSave: (u: UserProfile) => void; onLogout: () => void; theme: AppTheme;
   onRegeneratePlan: () => void; onInstall: () => void; canInstall: boolean; t: any; lang: string;
-}> = ({ user, onSave, onLogout, t }) => {
+}> = ({ user, onSave, onLogout, onInstall, canInstall, t, lang }) => {
   const [edited, setEdited] = useState(user);
+  const [foodInput, setFoodInput] = useState('');
+
+  const addFood = (type: 'liked' | 'disliked') => {
+    if (!foodInput.trim()) return;
+    const list = type === 'liked' ? [...(edited.likedFoods || [])] : [...(edited.dislikedFoods || [])];
+    if (!list.includes(foodInput.trim())) {
+      list.push(foodInput.trim());
+      setEdited({ ...edited, [type === 'liked' ? 'likedFoods' : 'dislikedFoods']: list });
+    }
+    setFoodInput('');
+  };
+
+  const removeFood = (food: string, type: 'liked' | 'disliked') => {
+    const list = type === 'liked' ? [...(edited.likedFoods || [])] : [...(edited.dislikedFoods || [])];
+    const filtered = list.filter(f => f !== food);
+    setEdited({ ...edited, [type === 'liked' ? 'likedFoods' : 'dislikedFoods']: filtered });
+  };
+
   return (
-    <div className="space-y-6 pb-12">
-      <div className="bg-white rounded-[2.5rem] p-8 border shadow-sm space-y-6">
-        <h3 className="text-xl font-black text-slate-800 mb-4">{t.settings.title}</h3>
-        <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.name}</label><input value={edited.name} onChange={e => setEdited({...edited, name: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
-        <button onClick={() => onSave(edited)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">{t.settings.save}</button>
+    <div className="space-y-6 pb-20 animate-in fade-in">
+      <div className="bg-white rounded-[2.5rem] p-8 border shadow-sm space-y-8 relative overflow-hidden">
+        <div className="flex justify-between items-center mb-6">
+           <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">الملف الشخصي ⚙️</h3>
+           <span className="text-[10px] font-black text-slate-300 uppercase">Profile Settings</span>
+        </div>
+
+        <div className="space-y-6">
+          <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.name}</label><input value={edited.name} onChange={e => setEdited({...edited, name: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
+          
+          <div className="grid grid-cols-2 gap-4">
+             <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.age}</label><input type="number" value={edited.age} onChange={e => setEdited({...edited, age: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold" /></div>
+             <div>
+                <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.gender}</label>
+                <div className="flex bg-slate-50 p-1 rounded-2xl border gap-1">
+                   <button onClick={() => setEdited({...edited, gender: 'male'})} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${edited.gender === 'male' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>{t.setup.male}</button>
+                   <button onClick={() => setEdited({...edited, gender: 'female'})} className={`flex-1 py-2 rounded-xl text-xs font-black transition-all ${edited.gender === 'female' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>{t.setup.female}</button>
+                </div>
+             </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{lang === 'ar' ? 'معدل نشاطك اليومي 🏃' : 'Daily Activity 🏃'}</label>
+              <select value={edited.activityLevel} onChange={e => setEdited({...edited, activityLevel: e.target.value as any})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-sm">
+                <option value="sedentary">{lang === 'ar' ? 'خامل (مكتبي)' : 'Sedentary'}</option>
+                <option value="light">{lang === 'ar' ? 'نشاط خفيف' : 'Light'}</option>
+                <option value="moderate">{lang === 'ar' ? 'نشاط متوسط' : 'Moderate'}</option>
+                <option value="active">{lang === 'ar' ? 'نشاط عالٍ' : 'Active'}</option>
+              </select>
+            </div>
+            <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">اللغة (LANGUAGE)</label>
+              <select value={edited.language} onChange={e => setEdited({...edited, language: e.target.value as Language})} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-sm">
+                <option value="ar">العربية</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+             <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.height} (CM)</label><input type="number" value={edited.height} onChange={e => setEdited({...edited, height: Number(e.target.value)})} className="w-full p-3 bg-slate-50 border rounded-xl outline-none font-bold text-center" /></div>
+             <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.currentWeight}</label><input type="number" value={edited.currentWeight} onChange={e => setEdited({...edited, currentWeight: Number(e.target.value)})} className="w-full p-3 bg-slate-50 border rounded-xl outline-none font-bold text-center" /></div>
+             <div><label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.targetWeight}</label><input type="number" value={edited.targetWeight} onChange={e => setEdited({...edited, targetWeight: Number(e.target.value)})} className="w-full p-3 bg-slate-50 border rounded-xl outline-none font-bold text-center" /></div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.likedFoods} ❤️</label>
+            <div className="flex gap-2 mb-3">
+               <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
+               <button onClick={() => addFood('liked')} className="w-10 h-10 bg-indigo-600 text-white rounded-xl font-black">+</button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {edited.likedFoods?.map(f => (
+                <span key={f} onClick={() => removeFood(f, 'liked')} className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-[10px] font-bold border border-indigo-100 cursor-pointer">#{f} ✕</span>
+              ))}
+            </div>
+          </div>
+          
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase">{t.setup.dislikedFoods} 🚫</label>
+            <div className="flex gap-2 mb-3">
+               <input value={foodInput} onChange={e => setFoodInput(e.target.value)} className="flex-1 p-3 bg-slate-50 border rounded-xl outline-none font-bold text-xs" placeholder={t.setup.addFoodPlaceholder} />
+               <button onClick={() => addFood('disliked')} className="w-10 h-10 bg-rose-500 text-white rounded-xl font-black">+</button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {edited.dislikedFoods?.map(f => (
+                <span key={f} onClick={() => removeFood(f, 'disliked')} className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-lg text-[10px] font-bold border border-rose-100 cursor-pointer">#{f} ✕</span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8 p-6 bg-indigo-50 rounded-[2rem] border border-indigo-100 text-center space-y-2">
+           <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">محاولات تنسيق الوجبات المتبقية:</p>
+           <p className="text-2xl font-black text-indigo-900">{Math.max(0, 2 - (edited.mealRegenCount || 0))} / 2</p>
+        </div>
+
+        <button onClick={() => onSave(edited)} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 transition-all active:scale-95 hover:bg-indigo-700">
+           {t.settings.save} 💾
+        </button>
       </div>
+
+      <div className="bg-white rounded-[2.5rem] p-8 border shadow-sm space-y-6">
+        <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">تثبيت التطبيق 📱 🧱</h3>
+        <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 space-y-4">
+           <p className="text-[10px] font-bold text-indigo-700 leading-relaxed">🍎 <b>iOS لمستخدمي iPhone:</b> اضغط على زر 'مشاركة' (المربع وسهم للأعلى) ثم اختر 'إضافة إلى الشاشة الرئيسية'.</p>
+           <p className="text-[10px] font-bold text-indigo-700 leading-relaxed">🤖 <b>Android لمستخدمي Android:</b> اختر 'تثبيت' من قائمة خيارات المتصفح (الثلاث نقاط).</p>
+        </div>
+        {canInstall && (
+          <button onClick={onInstall} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl flex items-center justify-center gap-2">
+            تثبيت موازن AI على شاشتك الرئيسية 🚀
+          </button>
+        )}
+      </div>
+
+      <div className="bg-white rounded-[2.5rem] p-8 border shadow-sm space-y-4">
+         <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">🧘 تواصل مع المطور</h3>
+         <div className="flex flex-col gap-3">
+            <a href="mailto:b_aljazzar@yahoo.com" className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border hover:border-indigo-200 transition-all">
+               <span className="text-xl">📧</span>
+               <span className="text-xs font-bold text-slate-600">b_aljazzar@yahoo.com</span>
+            </a>
+            <a href="https://www.linkedin.com/in/bassam-aljazzar/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border hover:border-indigo-200 transition-all">
+               <span className="text-xl">🔗</span>
+               <span className="text-xs font-bold text-slate-600">Bassam Aljazzar on LinkedIn</span>
+            </a>
+         </div>
+      </div>
+
       <button onClick={onLogout} className="w-full p-4 text-rose-500 font-black text-xs uppercase hover:bg-rose-50 rounded-2xl transition-all">{t.settings.logout}</button>
     </div>
   );

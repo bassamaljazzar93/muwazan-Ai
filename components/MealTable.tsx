@@ -92,9 +92,13 @@ const MealTable: React.FC<MealTableProps> = ({ plan, mode, onUpdateDay, user, la
         {mealKeys.map(key => {
           const meal = (currentDayMeals as any)[key];
           return (
-            <div key={key} className={`bg-white rounded-[2.5rem] p-6 border border-slate-100 shadow-sm flex flex-col min-h-[380px] transition-all relative overflow-hidden group`}>
+            <div key={key} className={`bg-white rounded-[2.5rem] p-6 border border-slate-100 shadow-sm flex flex-col min-h-[340px] transition-all relative overflow-hidden group`}>
                <p className="text-indigo-600 font-black text-[10px] uppercase tracking-widest mb-4">{mealLabels[key]}</p>
-               <h4 className="text-xl font-black text-slate-800 mb-4 leading-tight min-h-[3rem]">{meal?.name || '---'}</h4>
+               
+               {/* Use line-clamp to prevent massive titles from stretching the card */}
+               <h4 className="text-xl font-black text-slate-800 mb-4 leading-tight min-h-[4.5rem] line-clamp-3" title={meal?.name}>
+                 {meal?.name || '---'}
+               </h4>
                
                <div className="flex flex-wrap gap-1.5 mb-6">
                   {meal?.ingredients?.slice(0, 4).map((ing: string, i: number) => (

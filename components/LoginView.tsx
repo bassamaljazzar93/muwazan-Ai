@@ -7,6 +7,15 @@ import {
   serverTimestamp
 } from "../firebase";
 
+// Analytics helper
+const analytics = (window as any).firebaseAnalytics;
+
+const trackEvent = (eventName: string, params?: any) => {
+  if (analytics) {
+    analytics.logEvent(eventName, params);
+  }
+};
+
 interface LoginViewProps {
   onLogin: (email: string) => void;
 }
@@ -48,17 +57,41 @@ const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
             email: cred.user.email,
             planId: "free",
             createdAt: serverTimestamp(),
+            lastLoginAt: serverTimestamp(),
           }, { merge: true });
+          
+          // Analytics: تتبع التسجيل
+          trackEvent('sign_up', { method: 'email' });
+          if (analytics) analytics.setUserId(cred.user.uid);
         }
 
         onLogin(email);
+        
       } else {
         // تسجيل دخول
-        await auth.signInWithEmailAndPassword(email, password);
+        const cred = await auth.signInWithEmailAndPassword(email, password);
+        
+        // تحديث آخر تسجيل دخول
+        if (cred.user) {
+          await db.collection("users").doc(cred.user.uid).update({
+            lastLoginAt: serverTimestamp(),
+          });
+          
+          // Analytics: تتبع تسجيل الدخول
+          trackEvent('login', { method: 'email' });
+          if (analytics) analytics.setUserId(cred.user.uid);
+        }
+        
         onLogin(email);
       }
     } catch (err: any) {
       console.error("Auth Error:", err);
+      
+      // Analytics: تتبع الأخطاء
+      trackEvent('login_error', { 
+        error_code: err?.code,
+        mode: mode 
+      });
       
       // ترجمة رسائل الخطأ
       const errorMessages: Record<string, string> = {

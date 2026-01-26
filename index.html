@@ -16,9 +16,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-analytics-compat.js"></script>
   
   <script>
-    // Initialize Firebase globally
+    // Firebase Configuration
     const firebaseConfig = {
       apiKey: "AIzaSyDJz-CxGvgB2dXRkhfJaFNqD6JYRQPvW1k",
       authDomain: "gen-lang-client-0012000350.firebaseapp.com",
@@ -34,10 +35,16 @@
       firebase.initializeApp(firebaseConfig);
     }
     
-    // Make available globally
+    // Initialize Services
     window.firebaseAuth = firebase.auth();
     window.firebaseDb = firebase.firestore();
     window.firebaseTimestamp = firebase.firestore.FieldValue.serverTimestamp;
+    
+    // Initialize Analytics
+    window.firebaseAnalytics = firebase.analytics();
+    
+    // Log app open event
+    window.firebaseAnalytics.logEvent('app_open');
   </script>
   
   <style>

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppMode, UserProfile, WeightLog, WeeklyPlan, Meal, AuthSession, WaterLog, AppTheme, Language, DailyPlan, TrainingDay, EnergyLog } from './types';
 import { DAYS_AR, DAYS_EN, NORMAL_MEALS_7DAYS, RAMADAN_MEALS_7DAYS, FOOD_OPTIONS, TRAINING_STRATEGIES } from './constants';
@@ -12,6 +11,26 @@ import WaterTracker from './components/WaterTracker';
 import { GoogleGenAI, Type } from '@google/genai';
 import { translations } from './i18n';
 
+// =====================================================
+// 📊 Analytics Helper
+// =====================================================
+const analytics = (window as any).firebaseAnalytics;
+
+const trackEvent = (eventName: string, params?: any) => {
+  if (analytics) {
+    analytics.logEvent(eventName, params);
+  }
+};
+
+const trackScreenView = (screenName: string) => {
+  if (analytics) {
+    analytics.logEvent('screen_view', { screen_name: screenName });
+  }
+};
+
+// =====================================================
+// 🎨 Constants
+// =====================================================
 const THEMES: Record<AppTheme, { bg: string, text: string, primary: string, shadow: string, border: string, accent: string }> = {
   indigo: { bg: 'bg-indigo-600', text: 'text-indigo-600', primary: 'indigo', shadow: 'shadow-indigo-100', border: 'border-indigo-100', accent: 'bg-indigo-50' },
   emerald: { bg: 'bg-emerald-600', text: 'text-emerald-600', primary: 'emerald', shadow: 'shadow-emerald-100', border: 'border-emerald-100', accent: 'bg-emerald-50' },
@@ -97,6 +116,11 @@ const App: React.FC = () => {
     document.documentElement.lang = lang;
   }, [lang]);
 
+  // 📊 Analytics: Track tab changes
+  useEffect(() => {
+    trackScreenView(activeTab);
+  }, [activeTab]);
+
   const themeColors = THEMES[user?.theme || 'indigo'];
   const todayStr = new Date().toISOString().split('T')[0];
   const todayWater = waterLogs.find(l => l.date === todayStr)?.amount || 0;
@@ -116,6 +140,13 @@ const App: React.FC = () => {
     const targetUser = profile || user;
     if (!targetUser) return;
     setIsGeneratingPlan(true);
+    
+    // 📊 Analytics: Track plan generation start
+    trackEvent('plan_generation_started', { 
+      skipMeals, 
+      activityLevel: targetUser.activityLevel 
+    });
+    
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const bmr = (10 * Number(targetUser.currentWeight)) + (6.25 * Number(targetUser.height)) - (5 * Number(targetUser.age)) + (targetUser.gender === 'male' ? 5 : -161);
@@ -162,16 +193,36 @@ const App: React.FC = () => {
           mealRegenCount: nextRegenCount
         });
       }
-    } catch (e) { console.error(e); } finally { setIsGeneratingPlan(false); }
+      
+      // 📊 Analytics: Track successful generation
+      trackEvent('plan_generation_completed', { 
+        skipMeals, 
+        strategy: strategyKey,
+        dailyCalories: dailyTarget
+      });
+      
+    } catch (e) { 
+      console.error(e);
+      // 📊 Analytics: Track error
+      trackEvent('plan_generation_error', { error: String(e) });
+    } finally { 
+      setIsGeneratingPlan(false); 
+    }
   };
 
   const handleEnergyLog = (level: number) => {
     if (!user) return;
     const newLogs = [...(user.energyLogs || []).filter(l => l.date !== todayStr), { date: todayStr, level, mood: level > 3 ? 'Good' : 'Tired' }];
     setUser({ ...user, energyLogs: newLogs });
+    
+    // 📊 Analytics: Track energy log
+    trackEvent('energy_logged', { level, mood: level > 3 ? 'good' : 'tired' });
   };
 
   const handleLogout = () => {
+    // 📊 Analytics: Track logout
+    trackEvent('logout');
+    
     localStorage.clear();
     window.location.reload();
   };
@@ -180,8 +231,60 @@ const App: React.FC = () => {
     if (deferredPrompt) {
       deferredPrompt.prompt();
       const { outcome } = await deferredPrompt.userChoice;
+      
+      // 📊 Analytics: Track PWA install
+      trackEvent('pwa_install_prompt', { outcome });
+      
       if (outcome === 'accepted') setDeferredPrompt(null);
     }
+  };
+
+  // 📊 Handler for mode change with analytics
+  const handleModeChange = () => {
+    const newMode = mode === 'normal' ? 'ramadan' : 'normal';
+    setMode(newMode);
+    trackEvent('mode_changed', { mode: newMode });
+  };
+
+  // 📊 Handler for water add with analytics
+  const handleWaterAdd = (ml: number) => {
+    const newTotal = todayWater + ml;
+    setWaterLogs([...waterLogs.filter(l => l.date !== todayStr), { date: todayStr, amount: newTotal }]);
+    
+    trackEvent('water_added', { 
+      amount: ml, 
+      total: newTotal,
+      goal: waterRequirementMl,
+      percentage: Math.round((newTotal / waterRequirementMl) * 100)
+    });
+    
+    // Check if goal achieved
+    if (newTotal >= waterRequirementMl && todayWater < waterRequirementMl) {
+      trackEvent('water_goal_achieved', { goal: waterRequirementMl });
+    }
+  };
+
+  // 📊 Handler for tab change with analytics
+  const handleTabChange = (tab: typeof activeTab) => {
+    setActiveTab(tab);
+    trackEvent('tab_changed', { tab });
+  };
+
+  // 📊 Handler for shopping open with analytics
+  const handleShoppingOpen = () => {
+    setShowShopping(true);
+    trackEvent('shopping_list_opened');
+  };
+
+  // 📊 Handler for weight log with analytics
+  const handleWeightLog = (d: string, w: number) => {
+    setWeightLogs([...weightLogs.filter(l => l.date !== d), { date: d, weight: Number(w) }].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime()));
+    
+    trackEvent('weight_logged', { 
+      weight: w, 
+      date: d,
+      remainingToGoal: Math.abs(Number(w) - (user?.targetWeight || 0))
+    });
   };
 
   const currentPlan = useMemo((): WeeklyPlan => {
@@ -213,7 +316,15 @@ const App: React.FC = () => {
     setUser(completeUser); 
     setShowSetup(false);
     setWeightLogs([{ date: new Date().toISOString().split('T')[0], weight: Number(u.currentWeight) }]);
-    generateFullPlanAI(completeUser); 
+    generateFullPlanAI(completeUser);
+    
+    // 📊 Analytics: Track profile setup complete
+    trackEvent('profile_setup_complete', {
+      gender: u.gender,
+      activityLevel: u.activityLevel,
+      goalType: u.currentWeight > u.targetWeight ? 'lose' : 'gain',
+      language: u.language
+    });
   }} initialLang={initialLanguage} />;
   
   if (isGeneratingPlan) return (
@@ -237,8 +348,8 @@ const App: React.FC = () => {
              <div><h1 className="text-lg font-black text-slate-800 leading-none">{t.appName}</h1><p className="text-[10px] font-bold text-slate-400 mt-1">{user?.name}</p></div>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => setMode(mode === 'normal' ? 'ramadan' : 'normal')} className="px-4 py-2 rounded-xl text-xs font-black border bg-white shadow-sm transition-all hover:shadow-md">{mode === 'ramadan' ? t.ramadanMode : t.normalMode}</button>
-            <button onClick={() => setShowShopping(true)} className="p-2 bg-white border rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-all">🛒</button>
+            <button onClick={handleModeChange} className="px-4 py-2 rounded-xl text-xs font-black border bg-white shadow-sm transition-all hover:shadow-md">{mode === 'ramadan' ? t.ramadanMode : t.normalMode}</button>
+            <button onClick={handleShoppingOpen} className="p-2 bg-white border rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-all">🛒</button>
           </div>
         </div>
       </header>
@@ -269,25 +380,35 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <WaterTracker amount={todayWater} goal={waterRequirementMl} onAdd={(ml) => setWaterLogs([...waterLogs.filter(l => l.date !== todayStr), { date: todayStr, amount: todayWater + ml }])} mode={mode} t={t} lang={lang} />
+            <WaterTracker amount={todayWater} goal={waterRequirementMl} onAdd={handleWaterAdd} mode={mode} t={t} lang={lang} />
             <MealTable plan={currentPlan} mode={mode} onUpdateDay={(d, meals) => setCustomWeeklyPlan(p => ({...p, [d]: { ...p?.[d], ...meals }}))} user={user!} lang={lang} t={t} weeklyTips={weeklyTips} />
           </div>
         )}
-        {activeTab === 'activity' && <ActivityTable user={user!} lang={lang} t={t} onGenerate={() => generateFullPlanAI(user!, true)} />}
-        {activeTab === 'calendar' && <CalendarView logs={weightLogs} target={user!.targetWeight} onEditLog={(d, w) => setWeightLogs([...weightLogs.filter(l => l.date !== d), { date: d, weight: Number(w) }].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime()))} lang={lang} />}
+        {activeTab === 'activity' && <ActivityTable user={user!} lang={lang} t={t} onGenerate={() => {
+          generateFullPlanAI(user!, true);
+          trackEvent('workout_plan_requested');
+        }} />}
+        {activeTab === 'calendar' && <CalendarView logs={weightLogs} target={user!.targetWeight} onEditLog={handleWeightLog} lang={lang} />}
         {activeTab === 'chat' && <ChatAdvisor user={user!} logs={weightLogs} t={t} lang={lang} />}
         {activeTab === 'settings' && <SettingsView user={user!} onSave={(updatedUser) => { 
           const skipMeals = (user?.mealRegenCount || 0) >= 2;
           setUser(updatedUser); 
-          generateFullPlanAI(updatedUser, skipMeals); 
+          generateFullPlanAI(updatedUser, skipMeals);
+          
+          // 📊 Analytics: Track settings saved
+          trackEvent('settings_saved', {
+            languageChanged: updatedUser.language !== user?.language,
+            weightChanged: updatedUser.currentWeight !== user?.currentWeight
+          });
         }} onLogout={handleLogout} theme={user?.theme || 'indigo'} onRegeneratePlan={() => {
            generateFullPlanAI(user!);
+           trackEvent('plan_regenerated');
         }} onInstall={handleInstall} canInstall={!!deferredPrompt} t={t} lang={lang} />}
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t px-6 py-4 flex justify-around items-center z-50 shadow-lg">
         {Object.entries(t.tabs).map(([key, label]) => (
-          <button key={key} onClick={() => setActiveTab(key as any)} className={`flex flex-col items-center gap-1 transition-all ${activeTab === key ? (mode === 'ramadan' ? 'text-emerald-600 scale-110' : `${themeColors.text} scale-110`) : 'text-slate-400'}`}>
+          <button key={key} onClick={() => handleTabChange(key as any)} className={`flex flex-col items-center gap-1 transition-all ${activeTab === key ? (mode === 'ramadan' ? 'text-emerald-600 scale-110' : `${themeColors.text} scale-110`) : 'text-slate-400'}`}>
             <span className="text-2xl">{{plan:'🥘',activity:'🏃',chat:'✨',calendar:'📈',settings:'⚙️'}[key]}</span>
             <span className="text-[9px] font-black uppercase">{label}</span>
           </button>
